@@ -1,15 +1,50 @@
 const express = require('express');
 const serverless = require('serverless-http');
+const cors = require('cors');
 
-const authRoutes = require('../routes/auth');
-const productRoutes = require('../routes/products');
+const productRoutes = require('../routes/app');
+const adminRoutes = require('../routes/admin');
+
+var corsOptions = {
+    methods : ['GET','POST'],
+    credentials:true,
+    optionsSuccessStatus:200
+};
 
 const app = express();
-app.use(express.urlencoded({ extended: true }));
+// app.use(bodyParser.raw({type: '*/*'}));
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+// app.use(cors(corsOptions));//enable cors
+// app.options('*',cors());
 
-// Mount routes WITHOUT prefix to avoid doubling /api
-app.use('/.netlify/functions/api/',authRoutes);
+app.use((req, res, next) => {
+  let data = '';
+  req.on('data', chunk => {
+    data += chunk;
+  });
+  req.on('end', () => {
+    try {
+      const contentType = req.headers['content-type'];
+      if (contentType && contentType.includes('application/json')) {
+		console.log('data',data);
+        req.body = JSON.parse(data);
+      } else if (contentType && contentType.includes('application/x-www-form-urlencoded')) {
+        const querystring = require('querystring');
+        req.body = querystring.parse(data);
+      } else {
+        req.body = data;
+      }
+    } catch (err) {
+      console.error('Body parsing error:', err);
+      req.body = {};
+    }
+    next();
+  });
+});
+
+
 app.use('/.netlify/functions/api/',productRoutes);
+app.use('/.netlify/functions/api/',adminRoutes);
 
 module.exports.handler = serverless(app);

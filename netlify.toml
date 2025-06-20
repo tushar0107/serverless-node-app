@@ -1,6 +1,11 @@
+[functions]
+  node_bundler = "esbuild"
+  included_files = ["routes/**"]
+  
 [build]
-  functions = "functions"
-  publish = "."
+  functions = "netlify/functions"
 
-[dev]
-  functions = "functions"
+[[redirects]]
+  from = "/api/*"
+  to = "/.netlify/functions/api/api/:splat"
+  status = 200
