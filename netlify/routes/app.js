@@ -4,24 +4,8 @@ const {Pool} = require('pg');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 
+const salt = process.env.SALT;
 
-const saltRounds = 10;
-const salt = bcrypt.genSaltSync(saltRounds);
-
-const token = jwt.sign({
-  id: 1,
-  username: 'GFG'
-}, salt, { expiresIn: '1h' });
-
-console.log(token);
-
-jwt.verify(token, salt, (err, decoded) => {
-    if (err) {
-      console.log('Token is invalid');
-    } else {
-      console.log('Decoded Token:', decoded);
-    }
-});
 
 const pool = new Pool({
   host: process.env.HOST,
@@ -53,11 +37,14 @@ router.post('/user/login', async(req, res) => {
 		}else{
 			const result = await pool.query(`SELECT * FROM users WHERE phone='${req.body.phone}';`);
 			if(result.rowCount){
-				const {id,first_name,last_name,email,address,password,phone} = result.rows[0];
+				const {id,first_name,last_name,email,address,password,phone,user_type} = result.rows[0];
 				if(bcrypt.compareSync(req.body.password,password)){
+					const token = jwt.sign({
+						id:id,first_name:first_name,last_name:last_name,email:email,address:address,password:password,phone:phone,user_type:user_type,
+					}, salt, { expiresIn: '1h' });
 					res.status(200).json({
 						status: true,
-						result: {id:id,first_name:first_name,last_name:last_name,email:email,address:address,phone:phone},
+						result: {id:id,first_name:first_name,last_name:last_name,email:email,address:address,phone:phone,token:token},
 						message: 'Logged In successfully'
 					});		
 				}else{
@@ -66,6 +53,11 @@ router.post('/user/login', async(req, res) => {
 						message: 'Password is incorrect'
 					});
 				}
+			}else{
+				res.status(404).json({
+					status: false,
+					message: 'User Not found'
+				});
 			}
 		}
 	}catch(error){
@@ -107,17 +99,19 @@ router.post('/user/register', async(req, res) =>{
 			});	
 		}else{
 			let password = bcrypt.hashSync(req.body.password,salt);
-			const result = await pool.query(`INSERT INTO users(first_name,last_name,email,address,phone,password,createdAt) VALUES(
+			const result = await pool.query(`INSERT INTO users(first_name,last_name,email,address,phone,password,user_type,createdAt) VALUES(
 				'${req.body.first_name}',
 				'${req.body.last_name}',
 				'${req.body.email}',
 				'${req.body.address}',
 				'${req.body.phone}',
 				'${password}',
-				'${date.toISOString()}');`);
-			
+				'customer',
+				'${date.toISOString()}') RETURNING *;`);
+			const token = jwt.sign({...req.body},salt, { expiresIn: '1h' });
 			res.status(200).json({
 				status: true,
+				result:{...result.rows[0],token:token},
 				message:'Registered Successfully',
 			});
 		}
@@ -397,7 +391,7 @@ router.post('/order-detail/create',async(req,res)=>{
 			actual_amount = actual_amount + (products[i].price*products[i].quantity);
 		}
 		let discounted_amount = actual_amount-(actual_amount*(disount_price/100))
-		const order = await pool.query(`INSERT INTO orders(user_id, actual_amount, total_amount, voucher_code, shipping_address) VALUES(
+		const order = await pool.query(`BEGIN; INSERT INTO orders(user_id, actual_amount, total_amount, voucher_code, shipping_address) VALUES(
 									${user_id},
 									${actual_amount},
 									${discounted_amount},
@@ -409,7 +403,7 @@ router.post('/order-detail/create',async(req,res)=>{
 		for (const prod in products) {
 			query.push(`(${order_id}, ${prod.quantity}, ${prod.amount}, ${prod.product_id})`);
 		}
-		const result = await pool.query(`INSERT INTO order_items(order_id, quantity, amount, product_id) VALUES ${query.join(', ')};`);
+		const result = await pool.query(`INSERT INTO order_items(order_id, quantity, amount, product_id) VALUES ${query.join(', ')}; ROLLBACK;`);
 		res.status(200).json({
 			status: true,
 			result: result.rows[0],

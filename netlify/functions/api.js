@@ -1,6 +1,7 @@
 const express = require('express');
 const serverless = require('serverless-http');
 const cors = require('cors');
+const jwt = require('jsonwebtoken');
 
 const productRoutes = require('../routes/app');
 const adminRoutes = require('../routes/admin');
@@ -10,6 +11,8 @@ var corsOptions = {
     credentials:true,
     optionsSuccessStatus:200
 };
+
+const salt = process.env.SALT;
 
 const app = express();
 // app.use(bodyParser.raw({type: '*/*'}));
@@ -43,8 +46,36 @@ app.use((req, res, next) => {
   });
 });
 
+const jwtVerify = (req,res,next)=>{
+    const token = req.header('Authorization');
+    if(token){
+        jwt.verify(token, salt, async(err, decoded) => {
+            if (err) {
+                res.status(401).json({
+                    status: false,
+                    message: 'Access Denied'
+                });
+            } else {
+                if(decoded.user_type=='admin'){
+                    next();
+                }else{
+                    res.status(401).json({
+                        status: false,
+                        message: 'Only admins are allowed to access this page'
+                    });
+                }
+            }
+        });
+    }else{
+        res.status(401).json({
+            status: false,
+            message: 'Access Denied'
+        });
+    }
+}
+
 
 app.use('/.netlify/functions/api/',productRoutes);
-app.use('/.netlify/functions/api/',adminRoutes);
+app.use('/.netlify/functions/api/',jwtVerify,adminRoutes);
 
 module.exports.handler = serverless(app);

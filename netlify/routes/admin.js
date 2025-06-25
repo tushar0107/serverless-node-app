@@ -3,6 +3,7 @@ const router = express.Router();
 const {Pool} = require('pg');
 const bcrypt = require('bcrypt');
 const multer = require('multer');
+const jwt = require('jsonwebtoken');
 
 // define storage for uploading files
 const storage = multer.diskStorage({
@@ -10,19 +11,18 @@ const storage = multer.diskStorage({
         cb(null,'public/products/');
     },
     filename:function(req,file,cb){
-        var post = req.body.post;
+        var product = req.body.product;
         var date = Date.now();
         if(file){
           //rename the file to avoid conflict
-          cb(null,post.username+'-'+date.toString()+'.'+file.originalname.split('.')[1]);
+          cb(null,product.name+'-'+date.toString()+'.'+file.originalname.split('.')[1]);
         }
     }
 });
 
 const upload = multer({storage: storage});
 
-const saltRounds = 10;
-const salt = bcrypt.genSaltSync(saltRounds);
+const salt = process.env.SALT;
 
 const pool = new Pool({
   host: process.env.HOST,
@@ -31,6 +31,53 @@ const pool = new Pool({
   database: process.env.DATABASE,
   port: process.env.PORT,
   ssl: {rejectUnauthorized:false}
+});
+
+router.post('/admin/login', async(req, res) => {
+	try{
+		if(!req.body.phone){
+			res.status(200).json({
+				status: false,
+				message:'Phone is required',
+			});	
+		}else if(!req.body.password){
+			res.status(200).json({
+				status: false,
+				message:'Password is required',
+			});	
+		}else{
+			const result = await pool.query(`SELECT * FROM users WHERE phone='${req.body.phone}';`);
+			if(result.rowCount){
+				const {id,first_name,last_name,email,address,password,phone,user_type} = result.rows[0];
+				if(bcrypt.compareSync(req.body.password,password)){
+					const token = jwt.sign({
+						id:id,first_name:first_name,last_name:last_name,email:email,address:address,password:password,phone:phone,user_type:user_type,
+					}, salt, { expiresIn: '1h' });
+					res.status(200).json({
+						status: true,
+						result: {id:id,token:token},
+						message: 'Logged In successfully'
+					});		
+				}else{
+					res.status(200).json({
+						status: false,
+						message: 'Password is incorrect'
+					});
+				}
+			}else{
+				res.status(404).json({
+					status: false,
+					message: 'User Not found'
+				});
+			}
+		}
+	}catch(error){
+		res.status(500).json({
+			status:false,
+			message:'Unexpected server error',
+			servermessage: error.message
+		});
+	}
 });
 
 router.post('/admin/users',async(req,res)=>{
@@ -51,16 +98,16 @@ router.post('/admin/users',async(req,res)=>{
 
 router.post('/admin/products',async(req,res)=>{
 	try{
-		const filter = req.body.filter;
-		const result = await pool.query(`SELECT p.*, json_agg(json_build_object('category_id',c.id,'category_name',c.name)) as categories FROM products p 
-				JOIN product_categories pc ON p.id=pc.product_id
-				JOIN categories c ON c.id=pc.category_id
+		const filter = req.body;
+		const query = `SELECT p.id, p.name, p.description, p.price, p.quantity, p.image, p.slug, json_agg(json_build_object('category_id',c.id,'category_name',c.name)) as categories FROM products p 
+				LEFT JOIN product_categories pc ON p.id=pc.product_id
+				LEFT JOIN categories c ON c.id=pc.category_id
 				WHERE
-				${filter.search ? `(description LIKE '%${filter.search}%' OR name LIKE '%${filter.search}%') AND`:''}
-				${filter.price ? `price BETWEEN ${filter.from} AND ${filter.to} AND ` : ''}
-				${filter.quantity ? `quantity<${filter.quantity} AND`: ''}
-				1=1 LIMIT ${filter.limit} OFFSET ${filter.offset};`);
-		console.log(result.rows);
+				${filter.search ? `(p.description ILIKE '%${filter.search}%' OR p.name ILIKE '%${filter.search}%') AND`:''}
+				${filter.price ? `p.price BETWEEN ${filter.from} AND ${filter.to} AND ` : ''}
+				${filter.quantity ? `p.quantity<${filter.quantity} AND`: ''}
+				1=1 GROUP BY p.id LIMIT ${filter.limit} OFFSET ${filter.offset};`;
+		const result = await pool.query(query);
 		res.status(200).json({
 			status: true,
 			result: result.rows,
